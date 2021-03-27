@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -60,6 +61,38 @@ var xml = `
 </domain>
 `
 
+// KVMMachine represents an ephemeral libvirt-managed KVM machine.
+type KVMMachine struct {
+	lv     *libvirt.Libvirt
+	domain libvirt.Domain
+}
+
+// Start creates and boots up a KVMMachine.
+func Start(lv *libvirt.Libvirt) (*KVMMachine, error) {
+	dom, err := lv.DomainCreateXML(xml, libvirt.DomainStartValidate)
+	if err != nil {
+		return nil, fmt.Errorf("Creating domain: %v", err)
+	}
+	k := &KVMMachine{
+		lv:     lv,
+		domain: dom,
+	}
+	return k, nil
+}
+
+// WriteConsole feeds the console to the provided Writer.
+// The only way to cancel it is to Destroy the KVMMachine (AFAICS go-libvirt
+// doesn't provide a further way to cancel either). If we had a shutdown method,
+// that might work too, not sure.
+func (k *KVMMachine) WriteConsole(w io.Writer) error {
+	return k.lv.DomainOpenConsole(k.domain, libvirt.OptString{"serial0"}, w, 0)
+}
+
+// Destroy unceremoniously destroys the machine.
+func (k *KVMMachine) Destroy() error {
+	return k.lv.DomainDestroy(k.domain)
+}
+
 var logger = log.New(os.Stdout, "hubris: ", 0)
 
 func run(ctx context.Context) error {
@@ -76,26 +109,18 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 
-	dom, err := l.DomainCreateXML(xml, libvirt.DomainStartValidate)
+	kvm, err := Start(l)
 	if err != nil {
-		return fmt.Errorf("Creating domain: %v", err)
+		return err
 	}
 
 	eg, _ := errgroup.WithContext(context.Background())
-	eg.Go(func() error {
-		logger.Printf("Opening console")
-		err := l.DomainOpenConsole(dom, libvirt.OptString{"serial0"}, os.Stderr, 0)
-		logger.Printf("DomainOpenConsole returned %v", err)
-		return err
-	})
+	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
 
 	<-ctx.Done()
 
-	logger.Printf("Destroying domain..")
-	if err := l.DomainDestroy(dom); err != nil {
-		logger.Printf("Destroying domain %+v: %v", dom, err)
-	} else {
-		logger.Printf("DomainDestroy successful")
+	if err := kvm.Destroy(); err != nil {
+		logger.Printf("Destroying KVM machine: %v", err)
 	}
 
 	if err := l.Disconnect(); err != nil {
