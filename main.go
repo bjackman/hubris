@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"time"
 
 	libvirt "github.com/digitalocean/go-libvirt"
@@ -160,7 +161,7 @@ var xml = `
 
 var logger = log.New(os.Stdout, "hubris: ", 0)
 
-func run() error {
+func run(ctx context.Context) error {
 	// This dials libvirt on the local machine, but you can substitute the first
 	// two parameters with "tcp", "<ip address>:<port>" to connect to libvirt on
 	// a remote machine.
@@ -187,9 +188,7 @@ func run() error {
 		return err
 	})
 
-	logger.Printf("Sleeping...")
-	time.Sleep(5 * time.Second)
-	logger.Printf("...Slept")
+	<-ctx.Done()
 
 	logger.Printf("Destroying domain..")
 	if err := l.DomainDestroy(dom); err != nil {
@@ -206,7 +205,10 @@ func run() error {
 }
 
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := run(ctx); err != nil {
 		logger.Fatal(err)
 	}
 }
