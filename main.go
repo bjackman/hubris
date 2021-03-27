@@ -93,6 +93,24 @@ func (k *KVMMachine) Destroy() error {
 	return k.lv.DomainDestroy(k.domain)
 }
 
+// NetworkAddr returns any addresses that the machine was given on the libvirt
+// virtual network.
+func (k *KVMMachine) NetworkAddrs() ([]string, error) {
+	ifaces, err := k.lv.DomainInterfaceAddresses(
+		k.domain, uint32(libvirt.DomainInterfaceAddressesSrcLease), 0)
+	if err != nil {
+		return nil, fmt.Errorf("DomainInterfaceAddresses: %v", err)
+	}
+	var ips []string
+	for _, iface := range ifaces {
+		logger.Printf("iface: %+v", iface)
+		for _, addr := range iface.Addrs {
+			ips = append(ips, addr.Addr)
+		}
+	}
+	return ips, nil
+}
+
 var logger = log.New(os.Stdout, "hubris: ", 0)
 
 func run(ctx context.Context) error {
@@ -117,7 +135,14 @@ func run(ctx context.Context) error {
 	eg, _ := errgroup.WithContext(context.Background())
 	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
 
-	<-ctx.Done()
+	addrs, err := kvm.NetworkAddrs()
+	if err != nil {
+		logger.Printf("Getting addrs: %v", err)
+	} else {
+		for _, addr := range addrs {
+			logger.Printf("Address: %q", addr)
+		}
+	}
 
 	if err := kvm.Destroy(); err != nil {
 		logger.Printf("Destroying KVM machine: %v", err)
