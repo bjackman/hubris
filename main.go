@@ -13,6 +13,10 @@ import (
 	libvirt "github.com/digitalocean/go-libvirt"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 )
 
 var xml = `
@@ -278,7 +282,7 @@ func dialSSH(ctx context.Context, addr string) (*ssh.Client, error) {
 	return ssh.NewClient(sshConn, newChanCh, reqCh), nil
 }
 
-func run(ctx context.Context) error {
+func kvmExample(ctx context.Context) error {
 	logger.Printf("Connecting to libvirt...")
 
 	// This dials libvirt on the local machine, but you can substitute the first
@@ -348,11 +352,41 @@ func run(ctx context.Context) error {
 	return nil
 }
 
+func dockerExample(ctx context.Context) error {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("Creating docker client: %v", err)
+	}
+
+	resp, err := cli.ContainerCreate(ctx, &container.Config{
+		Image: "awair-local-prometheus",
+		Cmd:   []string{"awair-local-prometheus", "--awair-address=http://awair-elem-143b7b"},
+	}, nil, nil, nil, "")
+	if err != nil {
+		return fmt.Errorf("Creating docker container: %v", err)
+	}
+
+	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf(": %v", err)
+	}
+
+	statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("Awaiting docker container: %v", err)
+		}
+	case <-statusCh:
+	}
+
+	return nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := run(ctx); err != nil {
+	if err := dockerExample(ctx); err != nil {
 		logger.Fatal(err)
 	}
 	logger.Printf("Done")
