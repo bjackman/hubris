@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libvirt "github.com/digitalocean/go-libvirt"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -103,7 +104,6 @@ func (k *KVMMachine) NetworkAddrs() ([]string, error) {
 	}
 	var ips []string
 	for _, iface := range ifaces {
-		logger.Printf("iface: %+v", iface)
 		for _, addr := range iface.Addrs {
 			ips = append(ips, addr.Addr)
 		}
@@ -133,6 +133,33 @@ func awaitDHCPLease(ctx context.Context, kvm *KVMMachine) (string, error) {
 		}
 	}
 
+}
+
+// Uses a hard-coded SSH config to connect to the given network address.
+func dialSSH(addr string) (*ssh.Client, error) {
+	// Load keys.
+	path := "/home/brendan/.ssh/id_rsa"
+	keyBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("Reading SSH private key from %v: %v", path, err)
+	}
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Parsing SSH private key from %v: %v", path, err)
+	}
+
+	// Dial.
+	config := &ssh.ClientConfig{
+		User: "ubuntu",
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		},
+	}
+	client, err := ssh.Dial("tcp", addr, config)
+	if err != nil {
+		return nil, fmt.Errorf("Dial SSH: %v", err)
+	}
+	return client, nil
 }
 
 func run(ctx context.Context) error {
@@ -177,7 +204,13 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("Getting guest network address: %v", err)
 	}
-	logger.Printf("Addr: %q", addr)
+
+	time.Sleep(10 * time.Second)
+	client, err := dialSSH(addr + ":22")
+	if err != nil {
+		return err
+	}
+	client.Close()
 
 	return nil
 }
