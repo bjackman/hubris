@@ -148,13 +148,27 @@ func run(ctx context.Context) error {
 	if err := l.Connect(); err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
+	defer func() {
+		if err := l.Disconnect(); err != nil {
+			logger.Printf("Disconnect: %v", err)
+		}
+	}()
+
+	// We'll use this Group to do stuff that runs until kvm gets destroyed,
+	// so we create it now in order to have defers lined up properly.
+	eg, _ := errgroup.WithContext(context.Background())
+	defer eg.Wait()
 
 	kvm, err := Start(l)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := kvm.Destroy(); err != nil {
+			logger.Printf("Destroying KVM machine: %v", err)
+		}
+	}()
 
-	eg, _ := errgroup.WithContext(context.Background())
 	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
 
 	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -165,15 +179,7 @@ func run(ctx context.Context) error {
 	}
 	logger.Printf("Addr: %q", addr)
 
-	if err := kvm.Destroy(); err != nil {
-		logger.Printf("Destroying KVM machine: %v", err)
-	}
-
-	if err := l.Disconnect(); err != nil {
-		logger.Printf("Disconnect: %v", err)
-	}
-
-	return eg.Wait()
+	return nil
 }
 
 func main() {
@@ -183,4 +189,5 @@ func main() {
 	if err := run(ctx); err != nil {
 		logger.Fatal(err)
 	}
+	logger.Printf("Done")
 }
