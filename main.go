@@ -282,24 +282,27 @@ func dialSSH(ctx context.Context, addr string) (*ssh.Client, error) {
 	return ssh.NewClient(sshConn, newChanCh, reqCh), nil
 }
 
-func kvmExample(ctx context.Context) error {
-	logger.Printf("Connecting to libvirt...")
-
-	// This dials libvirt on the local machine, but you can substitute the first
-	// two parameters with "tcp", "<ip address>:<port>" to connect to libvirt on
-	// a remote machine.
-	c, err := net.DialTimeout("unix", "/var/run/libvirt/libvirt-sock", 2*time.Second)
+func example(ctx context.Context, dockerClient *client.Client, libvirtClient *libvirt.Libvirt) error {
+	containerName := "hubris-alp"
+	resp, err := dockerClient.ContainerCreate(ctx, &container.Config{
+		Image: "awair-local-prometheus",
+		Cmd:   []string{"awair-local-prometheus", "--awair-address=http://awair-elem-143b7b"},
+	}, nil, nil, nil, containerName)
 	if err != nil {
-		return fmt.Errorf("failed to dial libvirt: %v", err)
-	}
-
-	l := libvirt.New(c)
-	if err := l.Connect(); err != nil {
-		return fmt.Errorf("failed to connect: %v", err)
+		return fmt.Errorf("Creating docker container: %v", err)
 	}
 	defer func() {
-		if err := l.Disconnect(); err != nil {
-			logger.Printf("Disconnect: %v", err)
+		if err := dockerClient.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{}); err != nil {
+			logger.Printf("Removing docker container %q: %v", containerName, err)
+		}
+	}()
+
+	if err := dockerClient.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf(": %v", err)
+	}
+	defer func() {
+		if err := dockerClient.ContainerStop(ctx, containerName, nil); err != nil {
+			logger.Printf("Removing docker container %q: %v", containerName, err)
 		}
 	}()
 
@@ -310,7 +313,7 @@ func kvmExample(ctx context.Context) error {
 
 	logger.Printf("Creating guest...")
 
-	kvm, err := Start(l)
+	kvm, err := Start(libvirtClient)
 	if err != nil {
 		return err
 	}
@@ -352,32 +355,35 @@ func kvmExample(ctx context.Context) error {
 	return nil
 }
 
-func dockerExample(ctx context.Context) error {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+func run(ctx context.Context) error {
+	logger.Printf("Connecting to libvirt...")
+	c, err := net.DialTimeout("unix", "/var/run/libvirt/libvirt-sock", 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to dial libvirt: %v", err)
+	}
+	defer c.Close()
+	libvirtClient := libvirt.New(c)
+	if err := libvirtClient.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+	defer func() {
+		if err := libvirtClient.Disconnect(); err != nil {
+			logger.Printf("Warning: Disconnecting from livirt: %v", err)
+		}
+	}()
+
+	logger.Printf("Connecting to docker daemon...")
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return fmt.Errorf("Creating docker client: %v", err)
 	}
-
-	resp, err := cli.ContainerCreate(ctx, &container.Config{
-		Image: "awair-local-prometheus",
-		Cmd:   []string{"awair-local-prometheus", "--awair-address=http://awair-elem-143b7b"},
-	}, nil, nil, nil, "")
-	if err != nil {
-		return fmt.Errorf("Creating docker container: %v", err)
-	}
-
-	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf(": %v", err)
-	}
-
-	statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("Awaiting docker container: %v", err)
+	defer func() {
+		if err := dockerClient.Close(); err != nil {
+			logger.Printf("Warning: Disconnecting from docker: %v", err)
 		}
-	case <-statusCh:
-	}
+	}()
+
+	example(ctx, dockerClient, libvirtClient)
 
 	return nil
 }
@@ -386,7 +392,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := dockerExample(ctx); err != nil {
+	if err := run(ctx); err != nil {
 		logger.Fatal(err)
 	}
 	logger.Printf("Done")
