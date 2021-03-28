@@ -292,6 +292,8 @@ func example(ctx context.Context, dockerClient *client.Client, libvirtClient *li
 		return fmt.Errorf("Creating docker container: %v", err)
 	}
 	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := dockerClient.ContainerRemove(ctx, containerName, types.ContainerRemoveOptions{}); err != nil {
 			logger.Printf("Removing docker container %q: %v", containerName, err)
 		}
@@ -301,6 +303,8 @@ func example(ctx context.Context, dockerClient *client.Client, libvirtClient *li
 		return fmt.Errorf(": %v", err)
 	}
 	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := dockerClient.ContainerStop(ctx, containerName, nil); err != nil {
 			logger.Printf("Removing docker container %q: %v", containerName, err)
 		}
