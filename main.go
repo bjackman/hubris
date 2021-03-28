@@ -234,8 +234,10 @@ func awaitDHCPLease(ctx context.Context, kvm *KVMMachine) (string, error) {
 
 }
 
-// Uses a hard-coded SSH config to connect to the given network address.
-func dialSSH(addr string) (*ssh.Client, error) {
+// Uses a hard-coded SSH config to connect to the given network address. The
+// network dial will be retried until context cancellation (and the most recent
+// dial error will be returned in that case), but the SSH setup will not.
+func dialSSH(ctx context.Context, addr string) (*ssh.Client, error) {
 	// Load keys.
 	path := "/home/brendan/.ssh/id_rsa"
 	keyBytes, err := os.ReadFile(path)
@@ -247,18 +249,33 @@ func dialSSH(addr string) (*ssh.Client, error) {
 		return nil, fmt.Errorf("Parsing SSH private key from %v: %v", path, err)
 	}
 
-	// Dial.
+	logger.Printf("Awaiting SSH availability on %v...", addr)
+	var tcpConn net.Conn
+	for {
+		tcpConn, err = net.Dial("tcp", addr)
+		if err == nil { // Break if error IS nil
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("Dial TCP %v: %v", addr, err)
+		case <-time.NewTimer(50 * time.Millisecond).C:
+		}
+	}
+
 	config := &ssh.ClientConfig{
 		User: "ubuntu",
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
-	client, err := ssh.Dial("tcp", addr, config)
+	sshConn, newChanCh, reqCh, err := ssh.NewClientConn(tcpConn, addr, config)
 	if err != nil {
 		return nil, fmt.Errorf("Dial SSH: %v", err)
 	}
-	return client, nil
+	return ssh.NewClient(sshConn, newChanCh, reqCh), nil
 }
 
 func run(ctx context.Context) error {
@@ -302,17 +319,16 @@ func run(ctx context.Context) error {
 
 	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
 
-	logger.Printf("Awaiting guest network availability...")
+	logger.Printf("Awaiting guest DHCP lease...")
 
-	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx2, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	addr, err := awaitDHCPLease(ctx2, kvm)
 	if err != nil {
 		return fmt.Errorf("Getting guest network address: %v", err)
 	}
 
-	time.Sleep(10 * time.Second)
-	client, err := dialSSH(addr + ":22")
+	client, err := dialSSH(ctx2, addr+":22")
 	if err != nil {
 		return err
 	}
