@@ -113,6 +113,28 @@ func (k *KVMMachine) NetworkAddrs() ([]string, error) {
 
 var logger = log.New(os.Stdout, "hubris: ", 0)
 
+// Waits until the gues machine has taken a DHCP lease, and returns the address
+// associated with the first such lease.
+func awaitDHCPLease(ctx context.Context, kvm *KVMMachine) (string, error) {
+	for {
+		addrs, err := kvm.NetworkAddrs()
+		if err != nil {
+			return "", err
+		}
+
+		if len(addrs) != 0 {
+			return addrs[0], nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.NewTimer(50 * time.Millisecond).C:
+		}
+	}
+
+}
+
 func run(ctx context.Context) error {
 	// This dials libvirt on the local machine, but you can substitute the first
 	// two parameters with "tcp", "<ip address>:<port>" to connect to libvirt on
@@ -135,14 +157,13 @@ func run(ctx context.Context) error {
 	eg, _ := errgroup.WithContext(context.Background())
 	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
 
-	addrs, err := kvm.NetworkAddrs()
+	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	addr, err := awaitDHCPLease(ctx2, kvm)
 	if err != nil {
-		logger.Printf("Getting addrs: %v", err)
-	} else {
-		for _, addr := range addrs {
-			logger.Printf("Address: %q", addr)
-		}
+		return fmt.Errorf("Getting guest network address: %v", err)
 	}
+	logger.Printf("Addr: %q", addr)
 
 	if err := kvm.Destroy(); err != nil {
 		logger.Printf("Destroying KVM machine: %v", err)
