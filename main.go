@@ -352,6 +352,30 @@ func example(ctx context.Context, dockerClient *client.Client, libvirtClient *li
 	}
 	defer client.Close()
 
+	time.Sleep(1 * time.Second)
+
+	network, err := libvirtClient.NetworkLookupByName("default")
+	if err != nil {
+		return fmt.Errorf("Looking up 'default' libvirt network: %v", err)
+	}
+	// TODO: No idea what the second return value is.
+	// The -1 seems to be to return as many as possible.
+	lvPorts, _, err := libvirtClient.NetworkListAllPorts(network, -1, 0)
+	if err != nil {
+		return fmt.Errorf("NetworkListAllPorts: %v", err)
+	}
+	logger.Printf("%d ports", len(lvPorts))
+	for _, port := range lvPorts {
+		params, _, err := libvirtClient.NetworkPortGetParameters(port, -1, 0)
+		if err != nil {
+			return fmt.Errorf("NetworkPortGetParameters: %v", err)
+		}
+		logger.Printf("%d params", len(params))
+		for _, param := range params {
+			logger.Printf("%+v", param)
+		}
+	}
+
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("Creating SSH session: %v", err)
@@ -395,9 +419,7 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	example(ctx, dockerClient, libvirtClient)
-
-	return nil
+	return example(ctx, dockerClient, libvirtClient)
 }
 
 func main() {
