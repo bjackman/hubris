@@ -332,7 +332,18 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client.Close()
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("Creating SSH session: %v", err)
+	}
+	defer session.Close()
+	output, err := session.CombinedOutput("echo hello world")
+	if err != nil {
+		return fmt.Errorf("Running command over SSH: %v", err)
+	}
+	logger.Printf("Output: %q", string(output))
 
 	return nil
 }
