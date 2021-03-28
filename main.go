@@ -357,12 +357,18 @@ func example(ctx context.Context, dockerClient *client.Client, libvirtClient *li
 		return fmt.Errorf("Creating SSH session: %v", err)
 	}
 	defer session.Close()
-	output, err := session.CombinedOutput("echo hello world")
+	// Now we hit the docker API. Hard-coding the address of the container
+	// (which is actually the address of the libvirt host) is no good
+	// obviously - we also can't look that address up from the libvirt API
+	// AFAICS. Instead I think we have to define the network ourselves so we
+	// know the default gateway - ctrl+F "default route" on
+	// https://libvirt.org/formatnetwork.html#examplesNAT
+	// (We are gonna need to define the network ourselves anyway).
+	output, err := session.CombinedOutput("curl 192.168.122.1:8080/air-data")
 	if err != nil {
-		return fmt.Errorf("Running command over SSH: %v", err)
+		return fmt.Errorf("Running command over SSH: %v - output:\n%v", err, string(output))
 	}
 	logger.Printf("Output: %q", string(output))
-	<-ctx.Done()
 
 	return nil
 }
@@ -395,9 +401,7 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	example(ctx, dockerClient, libvirtClient)
-
-	return nil
+	return example(ctx, dockerClient, libvirtClient)
 }
 
 func main() {
