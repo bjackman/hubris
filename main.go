@@ -11,12 +11,12 @@ import (
 	"time"
 
 	libvirt "github.com/digitalocean/go-libvirt"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 )
 
 var xml = `
@@ -284,10 +284,17 @@ func dialSSH(ctx context.Context, addr string) (*ssh.Client, error) {
 
 func example(ctx context.Context, dockerClient *client.Client, libvirtClient *libvirt.Libvirt) error {
 	containerName := "hubris-alp"
+	ports, portBindings, err := nat.ParsePortSpecs([]string{"8080:8080"})
+	if err != nil {
+		return fmt.Errorf("ParsePortSpecs: %v", err)
+	}
 	resp, err := dockerClient.ContainerCreate(ctx, &container.Config{
-		Image: "awair-local-prometheus",
-		Cmd:   []string{"awair-local-prometheus", "--awair-address=http://awair-elem-143b7b"},
-	}, nil, nil, nil, containerName)
+		Image:        "awair-local-prometheus",
+		Cmd:          []string{"awair-local-prometheus", "--awair-address=http://awair-elem-143b7b"},
+		ExposedPorts: ports,
+	}, &container.HostConfig{
+		PortBindings: portBindings,
+	}, nil, nil, containerName)
 	if err != nil {
 		return fmt.Errorf("Creating docker container: %v", err)
 	}
@@ -355,6 +362,7 @@ func example(ctx context.Context, dockerClient *client.Client, libvirtClient *li
 		return fmt.Errorf("Running command over SSH: %v", err)
 	}
 	logger.Printf("Output: %q", string(output))
+	<-ctx.Done()
 
 	return nil
 }
