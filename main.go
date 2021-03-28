@@ -262,6 +262,8 @@ func dialSSH(addr string) (*ssh.Client, error) {
 }
 
 func run(ctx context.Context) error {
+	logger.Printf("Connecting to libvirt...")
+
 	// This dials libvirt on the local machine, but you can substitute the first
 	// two parameters with "tcp", "<ip address>:<port>" to connect to libvirt on
 	// a remote machine.
@@ -285,17 +287,22 @@ func run(ctx context.Context) error {
 	eg, _ := errgroup.WithContext(context.Background())
 	defer eg.Wait()
 
+	logger.Printf("Creating guest...")
+
 	kvm, err := Start(l)
 	if err != nil {
 		return err
 	}
 	defer func() {
+		logger.Printf("Cleaning up guest.")
 		if err := kvm.Destroy(); err != nil {
 			logger.Printf("Destroying KVM machine: %v", err)
 		}
 	}()
 
 	eg.Go(func() error { return kvm.WriteConsole(os.Stderr) })
+
+	logger.Printf("Awaiting guest network availability...")
 
 	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
